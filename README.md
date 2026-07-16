@@ -65,14 +65,17 @@ Edit Config), then tray → Reload Config. Options mirror the sibling ports:
   native Win+Arrow snapping.
 - After placing, the rect is re-verified at 150/450 ms and re-applied if the app
   moved itself (keeps Electron apps like VS Code pixel-exact).
-- The hotkey uses `RegisterHotKey` — no keyboard hooks; typing is untouched while
-  the overlay is closed.
+- The hotkey tries `RegisterHotKey` first; for chords the shell already owns
+  (like `Win+T`, Explorer's taskbar-cycling shortcut) it falls back to a
+  low-level keyboard hook that intercepts only that exact chord — the same
+  approach AutoHotkey uses. All other typing passes through untouched.
 
 ## Known limitations
 
 - Apps with minimum/fixed size constraints (some Store apps, dialogs) may end up
   larger than the chosen cells — placement is best-effort.
 - A non-elevated Tactile cannot move windows running as administrator.
-- `Win+T` normally cycles taskbar apps; Tactile overrides it while running.
+- `Win+T` normally cycles taskbar apps; Tactile intercepts it while running
+  (that shortcut comes back as soon as Tactile exits).
 - Letters pressed while the Win key is still physically held arrive as OS
   shortcuts; release Win after the chord before typing the cells.

@@ -22,6 +22,17 @@ internal static class Win32
 
     internal static readonly IntPtr HWND_TOPMOST = new(-1);
 
+    internal const int WH_KEYBOARD_LL = 13;
+    internal const int WM_KEYDOWN = 0x0100;
+    internal const int WM_SYSKEYDOWN = 0x0104;
+    internal const uint LLKHF_INJECTED = 0x10;
+    internal const uint KEYEVENTF_KEYUP = 0x2;
+    internal const int VK_SHIFT = 0x10;
+    internal const int VK_CONTROL = 0x11;
+    internal const int VK_MENU = 0x12;
+    internal const int VK_LWIN = 0x5B;
+    internal const int VK_RWIN = 0x5C;
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct RECT
     {
@@ -71,6 +82,59 @@ internal static class Win32
     /// released with DestroyIcon or it leaks a GDI handle per call.</summary>
     [DllImport("user32.dll")]
     internal static extern bool DestroyIcon(IntPtr hIcon);
+
+    internal delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode;
+        public uint scanCode;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct INPUT
+    {
+        public uint type; // 1 = INPUT_KEYBOARD
+        public KEYBDINPUT ki;
+        // Pad to the size of the largest union member (MOUSEINPUT).
+        private readonly ulong _pad1;
+        private readonly ulong _pad2;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr SetWindowsHookExW(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll")]
+    internal static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr GetModuleHandleW(string? lpModuleName);
+
+    [DllImport("user32.dll")]
+    internal static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    internal static extern bool PostMessageW(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     internal static string GetWindowClass(IntPtr hWnd)
     {

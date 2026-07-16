@@ -33,8 +33,7 @@ public sealed class TrayApp : ApplicationContext
         if (!_hotkey.Register(mods, vk))
         {
             MessageBox.Show(
-                $"Could not register the hotkey {display} — another application already owns it.\n\n" +
-                "Is the AutoHotkey version (tactile.ahk) still running? Exit it and start Tactile again.",
+                $"Could not grab the hotkey {display} — both RegisterHotKey and the keyboard-hook fallback failed.",
                 "Tactile", MessageBoxButtons.OK, MessageBoxIcon.Error);
             _hotkey.Dispose();
             Environment.Exit(1);

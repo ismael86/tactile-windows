@@ -1,27 +1,34 @@
 namespace Tactile;
 
 /// <summary>
-/// Registers the global hotkey and raises <see cref="Pressed"/>.
+/// Registers global hotkeys and invokes their handlers. Supports any number of
+/// chords (grid toggle, save layout, layout picker, per-layout restore keys).
 ///
-/// Strategy: try RegisterHotKey first (cleanest, no hooks). Windows refuses
-/// chords the shell already owns — Explorer registers Win+T for taskbar
-/// cycling — so on refusal we fall back to a low-level keyboard hook
-/// (WH_KEYBOARD_LL) that intercepts the chord before Explorer sees it. That
-/// is exactly how the AutoHotkey version grabbed Win+T. The hook inspects
-/// key-downs only and swallows nothing else, so normal typing is untouched.
+/// Strategy per chord: try RegisterHotKey first (cleanest, no hooks). Windows
+/// refuses chords the shell already owns — Explorer registers Win+T for taskbar
+/// cycling — so on refusal that chord falls back to a low-level keyboard hook
+/// (WH_KEYBOARD_LL) which intercepts it before Explorer sees it. That is
+/// exactly how the AutoHotkey version grabbed Win+T. The hook inspects
+/// key-downs only and swallows nothing but the registered chords, so normal
+/// typing is untouched.
 /// </summary>
 public sealed class HotkeyManager : NativeWindow, IDisposable
 {
-    private const int HotkeyId = 1;
+    private sealed class Registration
+    {
+        public required int Id;
+        public required uint Modifiers;
+        public required uint Vk;
+        public required Action Handler;
+        public bool ViaHook;
+    }
 
-    private bool _registered;          // RegisterHotKey path active
-    private IntPtr _hook;              // WH_KEYBOARD_LL path active
+    private readonly Dictionary<int, Registration> _regs = [];
+    private int _nextId = 1;
+
+    private IntPtr _hook;
     // Field (not local) so the GC can never collect the delegate while hooked.
     private readonly Win32.LowLevelKeyboardProc _hookProc;
-    private uint _mods;
-    private uint _vk;
-
-    public event Action? Pressed;
 
     public HotkeyManager()
     {
@@ -29,32 +36,60 @@ public sealed class HotkeyManager : NativeWindow, IDisposable
         CreateHandle(new CreateParams());
     }
 
-    public bool Register(uint modifiers, uint vk)
+    /// <summary>Registers a chord. Returns its id, or 0 when the chord could not
+    /// be claimed by either mechanism.</summary>
+    public int Register(uint modifiers, uint vk, Action handler)
     {
-        Unregister();
-        _mods = modifiers;
-        _vk = vk;
+        int id = _nextId++;
+        var reg = new Registration { Id = id, Modifiers = modifiers, Vk = vk, Handler = handler };
 
         // MOD_NOREPEAT: holding the chord down fires only once.
-        _registered = Win32.RegisterHotKey(Handle, HotkeyId, modifiers | Win32.MOD_NOREPEAT, vk);
-        if (_registered)
-            return true;
+        if (Win32.RegisterHotKey(Handle, id, modifiers | Win32.MOD_NOREPEAT, vk))
+        {
+            _regs[id] = reg;
+            return id;
+        }
 
         // Chord is owned by another registrant (for Win+T: Explorer itself).
         // Take it anyway with a low-level keyboard hook.
-        _hook = Win32.SetWindowsHookExW(Win32.WH_KEYBOARD_LL, _hookProc,
-            Win32.GetModuleHandleW(null), 0);
+        reg.ViaHook = true;
+        if (!EnsureHook())
+            return 0;
+        _regs[id] = reg;
+        return id;
+    }
+
+    public void Unregister(int id)
+    {
+        if (!_regs.Remove(id, out var reg))
+            return;
+        if (!reg.ViaHook)
+            Win32.UnregisterHotKey(Handle, id);
+        ReleaseHookIfUnused();
+    }
+
+    public void UnregisterAll()
+    {
+        foreach (var reg in _regs.Values)
+        {
+            if (!reg.ViaHook)
+                Win32.UnregisterHotKey(Handle, reg.Id);
+        }
+        _regs.Clear();
+        ReleaseHookIfUnused();
+    }
+
+    private bool EnsureHook()
+    {
+        if (_hook != IntPtr.Zero)
+            return true;
+        _hook = Win32.SetWindowsHookExW(Win32.WH_KEYBOARD_LL, _hookProc, Win32.GetModuleHandleW(null), 0);
         return _hook != IntPtr.Zero;
     }
 
-    public void Unregister()
+    private void ReleaseHookIfUnused()
     {
-        if (_registered)
-        {
-            Win32.UnregisterHotKey(Handle, HotkeyId);
-            _registered = false;
-        }
-        if (_hook != IntPtr.Zero)
+        if (_hook != IntPtr.Zero && !_regs.Values.Any(r => r.ViaHook))
         {
             Win32.UnhookWindowsHookEx(_hook);
             _hook = IntPtr.Zero;
@@ -67,32 +102,35 @@ public sealed class HotkeyManager : NativeWindow, IDisposable
         {
             var data = System.Runtime.InteropServices.Marshal.PtrToStructure<Win32.KBDLLHOOKSTRUCT>(lParam);
             // Skip injected input (incl. our own dummy key) to avoid feedback loops.
-            if ((data.flags & Win32.LLKHF_INJECTED) == 0 && data.vkCode == _vk && ModifiersMatch())
+            if ((data.flags & Win32.LLKHF_INJECTED) == 0)
             {
-                if ((_mods & Win32.MOD_WIN) != 0)
-                    SendDummyKeyUp(); // mark the Win press as "used" so releasing it won't open Start
+                foreach (var reg in _regs.Values)
+                {
+                    if (!reg.ViaHook || reg.Vk != data.vkCode || !ModifiersMatch(reg.Modifiers))
+                        continue;
 
-                // Defer the real work: hook callbacks must return fast or the
-                // system silently drops the hook. WndProc picks this up.
-                Win32.PostMessageW(Handle, Win32.WM_HOTKEY, HotkeyId, IntPtr.Zero);
-                return (IntPtr)1; // swallow the keystroke — Explorer never sees it
+                    if ((reg.Modifiers & Win32.MOD_WIN) != 0)
+                        SendDummyKeyUp(); // mark the Win press as "used" so releasing it won't open Start
+
+                    // Defer the real work: hook callbacks must return fast or the
+                    // system silently drops the hook. WndProc picks this up.
+                    Win32.PostMessageW(Handle, Win32.WM_HOTKEY, reg.Id, IntPtr.Zero);
+                    return (IntPtr)1; // swallow the keystroke — the shell never sees it
+                }
             }
         }
         return Win32.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     }
 
-    /// <summary>True when exactly the configured modifiers are held.</summary>
-    private bool ModifiersMatch()
+    /// <summary>True when exactly the given modifiers are held.</summary>
+    private static bool ModifiersMatch(uint mods)
     {
         static bool Down(int vk) => (Win32.GetAsyncKeyState(vk) & 0x8000) != 0;
         bool win = Down(Win32.VK_LWIN) || Down(Win32.VK_RWIN);
-        bool ctrl = Down(Win32.VK_CONTROL);
-        bool alt = Down(Win32.VK_MENU);
-        bool shift = Down(Win32.VK_SHIFT);
-        return win == ((_mods & Win32.MOD_WIN) != 0)
-            && ctrl == ((_mods & Win32.MOD_CONTROL) != 0)
-            && alt == ((_mods & Win32.MOD_ALT) != 0)
-            && shift == ((_mods & Win32.MOD_SHIFT) != 0);
+        return win == ((mods & Win32.MOD_WIN) != 0)
+            && Down(Win32.VK_CONTROL) == ((mods & Win32.MOD_CONTROL) != 0)
+            && Down(Win32.VK_MENU) == ((mods & Win32.MOD_ALT) != 0)
+            && Down(Win32.VK_SHIFT) == ((mods & Win32.MOD_SHIFT) != 0);
     }
 
     /// <summary>Injects a key-up of the unassigned VK 0xFF while Win is held —
@@ -110,14 +148,14 @@ public sealed class HotkeyManager : NativeWindow, IDisposable
     protected override void WndProc(ref Message m)
     {
         // Arrives from RegisterHotKey directly, or posted by the hook callback.
-        if (m.Msg == Win32.WM_HOTKEY && (int)m.WParam == HotkeyId)
-            Pressed?.Invoke();
+        if (m.Msg == Win32.WM_HOTKEY && _regs.TryGetValue((int)m.WParam, out var reg))
+            reg.Handler();
         base.WndProc(ref m);
     }
 
     public void Dispose()
     {
-        Unregister();
+        UnregisterAll();
         DestroyHandle();
     }
 }

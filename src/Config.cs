@@ -26,6 +26,12 @@ public class Config
 
     public HotkeySpec Hotkey { get; set; } = new();
 
+    /// <summary>Saves the current arrangement as a named layout (Win+Shift+T).</summary>
+    public HotkeySpec SaveLayoutHotkey { get; set; } = new() { Modifiers = ["Win", "Shift"], Key = "T" };
+
+    /// <summary>Opens the restore-layout picker (Win+Shift+R).</summary>
+    public HotkeySpec LayoutPickerHotkey { get; set; } = new() { Modifiers = ["Win", "Shift"], Key = "R" };
+
     /// <summary>0-255 overlay transparency.</summary>
     public int OverlayAlpha { get; set; } = 180;
 
@@ -122,15 +128,18 @@ public class Config
                 throw new InvalidDataException($"{name} \"{value}\" is not a 6-digit hex color (RRGGBB).");
         }
 
-        ParseHotkey(); // throws on invalid hotkey
+        // Throw on invalid hotkeys.
+        ParseHotkey(Hotkey);
+        ParseHotkey(SaveLayoutHotkey);
+        ParseHotkey(LayoutPickerHotkey);
     }
 
-    /// <summary>Translates the Hotkey spec into RegisterHotKey arguments plus a display string.</summary>
-    public (uint Modifiers, uint Vk, string Display) ParseHotkey()
+    /// <summary>Translates a hotkey spec into RegisterHotKey arguments plus a display string.</summary>
+    public static (uint Modifiers, uint Vk, string Display) ParseHotkey(HotkeySpec spec)
     {
         uint mods = 0;
         var names = new List<string>();
-        foreach (string m in Hotkey.Modifiers)
+        foreach (string m in spec.Modifiers)
         {
             switch (m.ToLowerInvariant())
             {
@@ -143,7 +152,7 @@ public class Config
         }
 
         uint vk;
-        string key = Hotkey.Key;
+        string key = spec.Key;
         if (key.Length == 1 && char.IsAsciiLetterOrDigit(key[0]))
             vk = char.ToUpperInvariant(key[0]);
         else if (Enum.TryParse<Keys>(key, true, out var parsed))

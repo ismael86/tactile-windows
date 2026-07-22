@@ -9,7 +9,7 @@ public static class WindowPlacer
 {
     private readonly record struct FrameDeltas(int Left, int Top, int Right, int Bottom);
 
-    public static void Place(IntPtr target, Rectangle visibleRect)
+    public static void Place(IntPtr target, Rectangle visibleRect, bool activate = true)
     {
         try
         {
@@ -22,7 +22,8 @@ public static class WindowPlacer
                 Win32.ShowWindow(target, Win32.SW_RESTORE);
 
             Apply(target, visibleRect);
-            Win32.SetForegroundWindow(target);
+            if (activate)
+                Win32.SetForegroundWindow(target);
 
             ScheduleVerify(target, visibleRect, 150);
             ScheduleVerify(target, visibleRect, 450);
@@ -61,7 +62,8 @@ public static class WindowPlacer
         return new FrameDeltas(0, 0, 0, 0);
     }
 
-    private static Rectangle? GetVisibleBounds(IntPtr hwnd)
+    /// <summary>The window's visible bounds (excludes the invisible resize border).</summary>
+    public static Rectangle? GetVisibleBounds(IntPtr hwnd)
     {
         if (Win32.DwmGetWindowAttribute(hwnd, Win32.DWMWA_EXTENDED_FRAME_BOUNDS, out var f,
                 System.Runtime.InteropServices.Marshal.SizeOf<Win32.RECT>()) == 0)

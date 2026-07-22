@@ -40,9 +40,38 @@ The result is `publish\Tactile.exe`.
 | two letters | Place window spanning both cells (inclusive) |
 | same letter twice, or letter + `Enter` | Place window in exactly that cell |
 | `Escape` / alt-tab away | Cancel, nothing moves |
+| `Win+Shift+T` | Save the current arrangement as a named layout |
+| `Win+Shift+R` | Restore-layout picker (press a number) |
 
-The tray icon menu has **Start at Login** (registers the exe in the HKCU Run key),
-**Reload Config**, **Edit Config**, and **Exit**.
+The tray icon menu has **Save Layout…**, **Restore Layout**, **Start at Login**
+(registers the exe in the HKCU Run key), **Reload Config**, **Edit Config**, and
+**Exit**.
+
+## Saved layouts
+
+`Win+Shift+T` snapshots which apps' windows sit in which grid cells on the
+current monitor (hand-placed windows get snapped to the nearest cells) and saves
+it under a name. Restore via `Win+Shift+R`, the tray menu, a per-layout hotkey
+(tray → Restore Layout → *name* → Assign Hotkey…), or the CLI:
+
+```powershell
+.\Tactile.exe --list-layouts
+.\Tactile.exe --save-layout work
+.\Tactile.exe --restore-layout work
+.\Tactile.exe --list-windows      # what a snapshot would capture
+```
+
+Layouts live in `layouts.json` next to the exe — pretty-printed, key-sorted, and
+safe to edit by hand (the file is re-read before every save/restore; a corrupt
+file is backed up to `layouts.json.bak`, never overwritten silently). Positions
+are stored as grid cells, so layouts survive resolution changes; a layout saved
+on a different grid size is scaled proportionally on restore. Windows of apps
+that aren't running are skipped and reported — nothing is launched. Restore
+order is deterministic: entries are placed lowest `order` first, so the highest
+lands frontmost.
+
+Windows are matched back to entries by executable name, with a title hint
+preferred when an app had several windows with distinct titles.
 
 ## Configuration
 
@@ -52,6 +81,7 @@ Edit Config), then tray → Reload Config. Options mirror the sibling ports:
 - `GridCols` / `GridRows` — grid dimensions (default 8×4)
 - `GridMarginPx` — gap between placed windows and around screen edges (0 = flush)
 - `Hotkey` — e.g. `{ "Modifiers": ["Win"], "Key": "T" }` or `["Ctrl","Alt"]` + `"G"`
+- `SaveLayoutHotkey` / `LayoutPickerHotkey` — same shape (default `Win+Shift+T` / `Win+Shift+R`)
 - `OverlayAlpha` — overlay transparency, 0–255
 - `CellHints` — the letter labels; dimensions must match the grid
 - Colors (hex `RRGGBB`), `FontName`, `FontScale`, `HintLineText`

@@ -19,6 +19,12 @@ public sealed class TrayApp : ApplicationContext
     private readonly IntPtr _trayIconHandle;
     private readonly ToolStripMenuItem _headerItem;
     private readonly ToolStripMenuItem _loginItem;
+    private readonly ToolStripMenuItem _saveLayoutItem;
+    private readonly ToolStripMenuItem _restoreLayoutItem;
+    private readonly LayoutManager _layouts;
+    private int _gridHotkeyId;
+    private int _saveHotkeyId;
+    private int _pickerHotkeyId;
     private OverlayForm? _overlay;
     private IntPtr _target;
 
@@ -28,9 +34,11 @@ public sealed class TrayApp : ApplicationContext
         _configPath = configPath;
 
         _hotkey = new HotkeyManager();
-        _hotkey.Pressed += Toggle;
-        (uint mods, uint vk, string display) = _cfg.ParseHotkey();
-        if (!_hotkey.Register(mods, vk))
+        _layouts = new LayoutManager(_hotkey, () => _cfg);
+
+        (uint mods, uint vk, string display) = Config.ParseHotkey(_cfg.Hotkey);
+        _gridHotkeyId = _hotkey.Register(mods, vk, Toggle);
+        if (_gridHotkeyId == 0)
         {
             MessageBox.Show(
                 $"Could not grab the hotkey {display} — both RegisterHotKey and the keyboard-hook fallback failed.",
@@ -38,19 +46,29 @@ public sealed class TrayApp : ApplicationContext
             _hotkey.Dispose();
             Environment.Exit(1);
         }
+        RegisterLayoutHotkeys();
 
         _headerItem = new ToolStripMenuItem($"Tactile — {display}") { Enabled = false };
         _loginItem = new ToolStripMenuItem("Start at Login", null, (_, _) => ToggleStartAtLogin());
+        _saveLayoutItem = new ToolStripMenuItem("Save Layout…", null, (_, _) => _layouts.SaveFlow());
+        _restoreLayoutItem = new ToolStripMenuItem("Restore Layout");
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_headerItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(_saveLayoutItem);
+        menu.Items.Add(_restoreLayoutItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_loginItem);
         menu.Items.Add(new ToolStripMenuItem("Reload Config", null, (_, _) => ReloadConfig()));
         menu.Items.Add(new ToolStripMenuItem("Edit Config", null, (_, _) => EditConfig()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApp()));
-        menu.Opening += (_, _) => _loginItem.Checked = IsStartAtLoginEnabled();
+        menu.Opening += (_, _) =>
+        {
+            _loginItem.Checked = IsStartAtLoginEnabled();
+            RebuildLayoutsMenu();
+        };
 
         (Icon icon, _trayIconHandle) = CreateGridIcon();
         _tray = new NotifyIcon
@@ -60,6 +78,53 @@ public sealed class TrayApp : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true,
         };
+    }
+
+    /// <summary>Registers the save/picker chords and every per-layout chord.
+    /// Failures are non-fatal: the grid hotkey is the only essential one.</summary>
+    private void RegisterLayoutHotkeys()
+    {
+        if (_saveHotkeyId != 0) _hotkey.Unregister(_saveHotkeyId);
+        if (_pickerHotkeyId != 0) _hotkey.Unregister(_pickerHotkeyId);
+
+        var (saveMods, saveVk, _) = Config.ParseHotkey(_cfg.SaveLayoutHotkey);
+        _saveHotkeyId = _hotkey.Register(saveMods, saveVk, () => _layouts.SaveFlow());
+
+        var (pickMods, pickVk, _) = Config.ParseHotkey(_cfg.LayoutPickerHotkey);
+        _pickerHotkeyId = _hotkey.Register(pickMods, pickVk, () => _layouts.ShowPicker());
+
+        _layouts.RefreshLayoutHotkeys();
+    }
+
+    /// <summary>One submenu per saved layout: Restore / Assign Hotkey… / Delete.</summary>
+    private void RebuildLayoutsMenu()
+    {
+        _saveLayoutItem.Text = $"Save Layout…  ({Config.ParseHotkey(_cfg.SaveLayoutHotkey).Display})";
+        _restoreLayoutItem.DropDownItems.Clear();
+
+        var names = _layouts.LayoutNames();
+        if (names.Count == 0)
+        {
+            _restoreLayoutItem.DropDownItems.Add(new ToolStripMenuItem("No saved layouts") { Enabled = false });
+            return;
+        }
+
+        foreach (var (name, hotkey) in names)
+        {
+            string suffix = hotkey is { } chord ? $"  ({HotkeyChord.Pretty(chord)})" : "";
+            var item = new ToolStripMenuItem(name + suffix);
+            item.DropDownItems.Add(new ToolStripMenuItem("Restore", null, (_, _) => _layouts.Restore(name)));
+            item.DropDownItems.Add(new ToolStripMenuItem("Assign Hotkey…", null, (_, _) => _layouts.AssignHotkeyFlow(name)));
+            if (hotkey is not null)
+                item.DropDownItems.Add(new ToolStripMenuItem("Remove Hotkey", null, (_, _) => _layouts.RemoveHotkey(name)));
+            item.DropDownItems.Add(new ToolStripSeparator());
+            item.DropDownItems.Add(new ToolStripMenuItem("Delete Layout", null, (_, _) => _layouts.Delete(name)));
+            _restoreLayoutItem.DropDownItems.Add(item);
+        }
+
+        _restoreLayoutItem.DropDownItems.Add(new ToolStripSeparator());
+        _restoreLayoutItem.DropDownItems.Add(new ToolStripMenuItem(
+            $"Picker…  ({Config.ParseHotkey(_cfg.LayoutPickerHotkey).Display})", null, (_, _) => _layouts.ShowPicker()));
     }
 
     // ------------------------------ Toggle ----------------------------------
@@ -140,18 +205,22 @@ public sealed class TrayApp : ApplicationContext
             return;
         }
 
-        (uint mods, uint vk, string display) = newCfg.ParseHotkey();
-        if (!_hotkey.Register(mods, vk))
+        (uint mods, uint vk, string display) = Config.ParseHotkey(newCfg.Hotkey);
+        _hotkey.Unregister(_gridHotkeyId);
+        int newId = _hotkey.Register(mods, vk, Toggle);
+        if (newId == 0)
         {
-            // New chord is taken; fall back to the old, still-valid one.
-            (uint oldMods, uint oldVk, string oldDisplay) = _cfg.ParseHotkey();
-            _hotkey.Register(oldMods, oldVk);
-            MessageBox.Show($"Hotkey {display} is already taken — keeping {oldDisplay}.",
+            // New chord could not be claimed; fall back to the old, still-valid one.
+            var (oldMods, oldVk, oldDisplay) = Config.ParseHotkey(_cfg.Hotkey);
+            _gridHotkeyId = _hotkey.Register(oldMods, oldVk, Toggle);
+            MessageBox.Show($"Hotkey {display} could not be claimed — keeping {oldDisplay}.",
                 "Tactile", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
+        _gridHotkeyId = newId;
 
         _cfg = newCfg;
+        RegisterLayoutHotkeys();
         _headerItem.Text = $"Tactile — {display}";
         _tray.Text = $"Tactile ({display})";
         Toast.Show("Config reloaded");

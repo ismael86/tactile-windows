@@ -16,6 +16,13 @@ internal static class Win32
     internal const uint SWP_NOZORDER = 0x4;
     internal const uint SWP_NOACTIVATE = 0x10;
     internal const uint DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    internal const uint DWMWA_CLOAKED = 14;
+    internal const int GWL_EXSTYLE = -20;
+    internal const int GA_ROOTOWNER = 3;
+    internal const uint SWP_NOSIZE = 0x1;
+    internal const uint SWP_NOMOVE = 0x2;
+    internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    internal static readonly IntPtr HWND_TOP = IntPtr.Zero;
     internal const int WS_EX_TOOLWINDOW = 0x80;
     internal const int WS_EX_TOPMOST = 0x8;
     internal const int WS_EX_NOACTIVATE = 0x08000000;
@@ -83,6 +90,53 @@ internal static class Win32
     [DllImport("user32.dll")]
     internal static extern bool DestroyIcon(IntPtr hIcon);
 
+    internal const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
+
+    /// <summary>A WinExe has no console; attaching to the launching terminal
+    /// makes CLI output visible when run from PowerShell/cmd.</summary>
+    [DllImport("kernel32.dll")]
+    internal static extern bool AttachConsole(uint dwProcessId);
+
+    internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    /// <summary>Enumerates top-level windows in z-order, frontmost first.</summary>
+    [DllImport("user32.dll")]
+    internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int GetWindowTextW(IntPtr hWnd, char[] lpString, int nMaxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int GetWindowTextLengthW(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetWindowLongPtrW(IntPtr hWnd, int nIndex);
+
+    /// <summary>GA_ROOTOWNER gives the owner chain root — the standard test for
+    /// "is this the window Alt-Tab would show".</summary>
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetAncestor(IntPtr hWnd, int gaFlags);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    /// <summary>Cloaked = present but not rendered: on another virtual desktop,
+    /// or a suspended UWP shell window. Must be filtered out of a snapshot.</summary>
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    internal static extern int DwmGetWindowAttributeInt(IntPtr hwnd, uint attr, out int value, int cbSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern bool QueryFullProcessImageNameW(IntPtr proc, uint flags, char[] buf, ref uint size);
+
     internal delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -141,5 +195,34 @@ internal static class Win32
         var buf = new char[256];
         int len = GetClassName(hWnd, buf, buf.Length);
         return len > 0 ? new string(buf, 0, len) : "";
+    }
+
+    internal static string GetWindowTitle(IntPtr hWnd)
+    {
+        int len = GetWindowTextLengthW(hWnd);
+        if (len <= 0)
+            return "";
+        var buf = new char[len + 1];
+        int got = GetWindowTextW(hWnd, buf, buf.Length);
+        return got > 0 ? new string(buf, 0, got) : "";
+    }
+
+    /// <summary>Full executable path of a process, or null when access is denied
+    /// (elevated or protected processes).</summary>
+    internal static string? GetProcessImagePath(uint pid)
+    {
+        IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (h == IntPtr.Zero)
+            return null;
+        try
+        {
+            var buf = new char[1024];
+            uint size = (uint)buf.Length;
+            return QueryFullProcessImageNameW(h, 0, buf, ref size) ? new string(buf, 0, (int)size) : null;
+        }
+        finally
+        {
+            CloseHandle(h);
+        }
     }
 }

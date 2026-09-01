@@ -4,3 +4,5 @@ publish/
 publish-portable/
 layouts.json
 layouts.json.bak
+
+dist/

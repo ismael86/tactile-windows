@@ -8,7 +8,22 @@ version) and `tactile-macos` (Swift/AppKit version).
 Press `Win+T`, a lettered grid appears over the active window's monitor, press two
 letters — the window snaps to the rectangle spanning those two cells.
 
-## Build
+## Install
+
+Grab `Tactile-Setup-x.y.z.exe` from the
+[releases page](https://github.com/ismael86/tactile-windows/releases) and run it.
+
+It installs per-user to `%LOCALAPPDATA%\Programs\Tactile` — no admin rights, no
+UAC prompt, and no .NET runtime to install first (the exe is self-contained).
+The installer offers a "start when I sign in" checkbox and a Start Menu entry;
+uninstall from Settings → Apps.
+
+The installer is **not code-signed**, so Windows will show *"Windows protected
+your PC"* the first time you run it. Click **More info → Run anyway**. (Tactile
+installs a low-level keyboard hook to grab shell-owned hotkeys like `Win+T`,
+which is also the sort of thing that makes antivirus heuristics twitchy.)
+
+## Build from source
 
 Requires the [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0):
 
@@ -26,11 +41,29 @@ dotnet run                   # run directly
 # Release single-file exe (needs the .NET 9 Desktop Runtime on the machine):
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
 
-# Fully portable exe (~70 MB, no runtime needed):
+# Fully portable exe (~110 MB, no runtime needed):
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish-portable
 ```
 
 The result is `publish\Tactile.exe`.
+
+### Building the installer
+
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) — 6.3 or newer, for
+`ArchitecturesAllowed=x64compatible`:
+
+```powershell
+winget install -e --id JRSoftware.InnoSetup
+.\build-installer.ps1
+```
+
+That publishes a self-contained exe and compiles `installer\Tactile.iss` into
+`dist\Tactile-Setup-<version>.exe`. The version comes from `<Version>` in
+`Tactile.csproj` — bump it there and nowhere else. Pass `-SkipPublish` to
+recompile the installer without redoing the slow publish step.
+
+The app icon (`assets\tactile.ico`) is committed; `tools\make-icon.ps1`
+regenerates it if the glyph ever changes.
 
 ## Usage
 
@@ -75,8 +108,10 @@ preferred when an app had several windows with distinct titles.
 
 ## Configuration
 
-`tactile.json` is created next to `Tactile.exe` on first run. Edit it (tray →
-Edit Config), then tray → Reload Config. Options mirror the sibling ports:
+`tactile.json` is created next to `Tactile.exe` on first run — for an
+installed copy that means `%LOCALAPPDATA%\Programs\Tactile`, alongside
+`layouts.json`. Edit it (tray → Edit Config), then tray → Reload Config.
+Options mirror the sibling ports:
 
 - `GridCols` / `GridRows` — grid dimensions (default 8×4)
 - `GridMarginPx` — gap between placed windows and around screen edges (0 = flush)

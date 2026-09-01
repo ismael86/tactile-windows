@@ -9,5 +9,14 @@
     <AssemblyName>Tactile</AssemblyName>
     <RootNamespace>Tactile</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Single source of truth for the version: build-installer.ps1 reads this
+         and passes it to Inno Setup, so it is never typed twice. -->
+    <Version>1.0.0</Version>
+    <Company>Ismael</Company>
+    <Product>Tactile</Product>
+    <AssemblyTitle>Tactile</AssemblyTitle>
+    <Description>Grid window placement for Windows</Description>
+    <ApplicationIcon>assets\tactile.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
